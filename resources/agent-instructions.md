@@ -276,15 +276,17 @@ Example for `components/c_health.gd`:
 ## Testing your work
 
 Delegate gameplay verification to the **game-tester** subagent (task tool): it launches
-the game off-screen, drives it with input, inspects state and logs, and — unlike you,
-possibly — actually sees the screenshots it takes. Tell it what changed and exactly what
+the game (off-screen on macOS, in a separate window on Windows/Linux), drives it with
+input, inspects state and logs, and — unlike you, possibly — actually sees the
+screenshots it takes. Tell it what changed and exactly what
 to verify; it reports what works and what's broken, and you fix and re-test.
 
 You also have the same MCP tools (server `genieengine`) yourself — fine for quick
 text-only probes without a full test pass (but leave screenshot judgment to game-tester
 unless your model views images):
 
-1. `run_game_test` — starts the game off-screen (full engine, real rendering).
+1. `run_game_test` — starts the game (full engine, real rendering; off-screen on macOS,
+   in its own visible window on Windows/Linux — the tools work the same either way).
 2. `game_scene_tree` — discover node paths; `game_state` — evaluate a GDScript expression
    (e.g. `get_node("/root/Main/Score").text`) to assert state.
 3. `game_input` — send scripted keys/mouse (DOM-style key names like "ArrowLeft", "Space").

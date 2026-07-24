@@ -246,10 +246,11 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
 
   agents[GAME_TESTER_AGENT] = {
     description:
-      'Plays and verifies the current game end-to-end: launches it off-screen, sends ' +
-      'scripted input, inspects scene tree / state / logs, and checks screenshots it can ' +
-      'actually see. Use it after gameplay or visual changes instead of testing yourself; ' +
-      'tell it what changed and what to verify, and it reports what works and what is broken.',
+      'Plays and verifies the current game end-to-end: launches it (off-screen on macOS, in ' +
+      'a separate window on Windows/Linux), sends scripted input, inspects scene tree / ' +
+      'state / logs, and checks screenshots it can actually see. Use it after gameplay or ' +
+      'visual changes instead of testing yourself; tell it what changed and what to verify, ' +
+      'and it reports what works and what is broken.',
     mode: 'subagent',
     model: imageModelRef,
     prompt:
@@ -258,7 +259,8 @@ export function applyAgentConfig(config: Record<string, unknown>, imageModelRef:
       'genieengine MCP tools, then report your findings. You never edit files — you test and ' +
       'report so the coding agent can fix.\n\n' +
       'Test procedure:\n' +
-      '1. run_game_test — start the game off-screen (full engine, real rendering).\n' +
+      '1. run_game_test — start the game (full engine, real rendering; off-screen on macOS, ' +
+      'in its own visible window on Windows/Linux — the tools work the same either way).\n' +
       '2. game_logs — check for script errors right away; a broken launch is the most ' +
       'important finding of all.\n' +
       '3. game_scene_tree — discover node paths; game_state evaluates a GDScript expression ' +

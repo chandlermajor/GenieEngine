@@ -10,10 +10,17 @@ import {
   domButtonToGodot,
   encodeKeyEvent,
   encodeMouseButtonEvent,
-  encodeMouseMotionEvent
+  encodeMouseMotionEvent,
+  keyEventToAgentPayload,
+  mouseButtonToAgentPayload,
+  mouseMotionToAgentPayload,
+  type KeyEventInput,
+  type MouseButtonInput,
+  type MouseMotionInput
 } from './godot-input-codec'
 import { addPerfFrames, appendPerfLog, drainPerfWindow, formatPerfStats, resetPerfWindow, type PerfStats } from './perf-monitor'
 import { cleanupTestAgent, injectTestAgent } from './test-agent'
+import { windowHandleArg, winhost, type WinHost } from './winhost'
 
 /**
  * Runs the user's game with the full desktop engine, rendered *inside* the
@@ -23,6 +30,17 @@ import { cleanupTestAgent, injectTestAgent } from './test-agent'
  * composite via the layerhost native addon; display state and input travel
  * over Godot's debugger protocol. Works in fullscreen — it's just a layer in
  * our window. AI test runs use the same pipeline without attaching the layer.
+ *
+ * Godot's embedded display server is macOS-ONLY. On Windows the game is
+ * embedded the way the Godot editor does it there: launched with `--wid` so
+ * its borderless window is OWNED by ours, then kept glued over the stage by
+ * winhost.ts (SetWindowPos via FFI) — input reaches it directly from the OS.
+ * Anywhere else (Linux, embedding unavailable) the game falls back to running
+ * in its own free-floating OS window. The debugger channel and the injected
+ * test agent are platform-independent, so AI test runs (screenshots, eval,
+ * scene tree, perf/FPS) work in every presentation; off-macOS, input
+ * injection switches from the embed:event channel to in-process injection
+ * via the agent (ogtest:input).
  */
 
 let state: GameState = { status: 'stopped' }
@@ -30,6 +48,9 @@ let nativeProcess: ChildProcess | null = null
 
 // Native embedded-session state
 let embedSession: EmbedSession | null = null
+// Whether the current run uses the embedded display server (macOS) or the
+// windowed fallback — decides how input reaches the game and how it's closed.
+let embeddedRun = false
 let layerAttached = false
 // Renderer's last requested layer visibility — remembered so a layer that
 // attaches while something covers the stage (modal, ECS tab) starts hidden.
@@ -205,6 +226,115 @@ function layerhost(): LayerHostAddon | null {
 }
 
 // ---------------------------------------------------------------------------
+// Windows owned-window embedding (winhost.ts)
+// ---------------------------------------------------------------------------
+//
+// Windows equivalent of the layer host, porting the Godot editor's in-editor
+// game view (display_server_windows.cpp embed_process, Godot 4.7): the game
+// is launched with `--wid <our HWND>`, which makes the engine create its
+// window borderless and OWNED by ours — owned windows always float above
+// their owner — and winhost keeps that window glued to the stage rect with
+// SetWindowPos. The OS routes input to the game window directly, so unlike
+// macOS no input forwarding happens.
+
+// Owned-window embed session state (play mode only; test runs stay external).
+let winAttached = false
+let winAttachPoll: ReturnType<typeof setInterval> | null = null
+let trackedWin: BrowserWindow | null = null
+
+/**
+ * Stage rect (CSS px, relative to the window's content area) → physical
+ * screen pixels, which is what SetWindowPos and Godot's --position expect.
+ * dipToScreenRect handles per-monitor DPI (Windows-only API; all callers are
+ * win32 paths).
+ */
+function stageScreenRect(win: BrowserWindow, rect: StageRect): Electron.Rectangle {
+  const content = win.getContentBounds()
+  return screen.dipToScreenRect(win, {
+    x: Math.round(content.x + rect.x),
+    y: Math.round(content.y + rect.y),
+    width: Math.max(1, Math.round(rect.width)),
+    height: Math.max(1, Math.round(rect.height))
+  })
+}
+
+function updateWinEmbedFrame(): void {
+  const addon = winhost()
+  const win = trackedWin ?? getMainWindow()
+  if (!winAttached || !addon || !win || !stageRect) return
+  const r = stageScreenRect(win, stageRect)
+  addon.setFrame(r.x, r.y, r.width, r.height)
+}
+
+// The embedded window sits at an absolute screen position, so dragging or
+// resizing the GenieEngine window must re-glue it (stage-rect reports from the
+// renderer only cover layout changes INSIDE the window).
+const onHostWindowMoved = (): void => updateWinEmbedFrame()
+
+function trackHostWindow(win: BrowserWindow): void {
+  trackedWin = win
+  win.on('move', onHostWindowMoved)
+  win.on('resize', onHostWindowMoved)
+}
+
+function untrackHostWindow(): void {
+  trackedWin?.removeListener('move', onHostWindowMoved)
+  trackedWin?.removeListener('resize', onHostWindowMoved)
+  trackedWin = null
+}
+
+function stopWinAttachPoll(): void {
+  if (winAttachPoll) {
+    clearInterval(winAttachPoll)
+    winAttachPoll = null
+  }
+}
+
+/**
+ * Poll for the game's owned window (created shortly after launch thanks to
+ * --wid) and glue it to the stage. Mirrors the Godot editor's EmbeddedProcess
+ * retry timer: tick until found, with the same generous 45s timeout — first
+ * boots of heavy projects can take a long time to open a window. Falls back
+ * to free-floating play if embedding never succeeds.
+ */
+function beginWinEmbedAttach(session: EmbedSession, win: BrowserWindow, addon: WinHost, pid: number): void {
+  const deadline = Date.now() + 45000
+  const giveUp = (why: string): void => {
+    stopWinAttachPoll()
+    emitLog(`[genieengine] window embedding unavailable (${why}) — the game plays in its own window`)
+    setState({ status: 'running', mode: 'native', view: 'external' })
+  }
+  const tick = (): void => {
+    if (embedSession !== session) {
+      // The run was stopped (or replaced) while we were polling.
+      stopWinAttachPoll()
+      return
+    }
+    const rect = stageRect ?? { x: 0, y: 0, width: 640, height: 360 }
+    const sr = stageScreenRect(win, rect)
+    let attached = false
+    try {
+      attached = addon.attach(win.getNativeWindowHandle(), pid, sr.x, sr.y, sr.width, sr.height, layerVisibleWanted)
+    } catch (err) {
+      giveUp(err instanceof Error ? err.message : String(err))
+      return
+    }
+    if (attached) {
+      stopWinAttachPoll()
+      winAttached = true
+      trackHostWindow(win)
+      emitLog('[genieengine] game embedded over the GenieEngine window (native, full performance)')
+      setState({ status: 'running', mode: 'native', view: 'embedded-window' })
+    } else if (Date.now() > deadline) {
+      giveUp('game window not found')
+    }
+  }
+  stopWinAttachPoll()
+  winAttachPoll = setInterval(tick, 250)
+  tick()
+}
+
+// ---------------------------------------------------------------------------
 // Native embedded mode
 // ---------------------------------------------------------------------------
 
@@ -225,6 +355,7 @@ export function setStageRect(rect: StageRect): void {
     layerhost()?.setFrame(rect.x, rect.y, rect.width, rect.height)
     sendStageSizeToGame(embedSession, rect)
   }
+  if (winAttached) updateWinEmbedFrame()
 }
 
 /** Renderer reports where the test card's live monitor box sits. */
@@ -280,6 +411,7 @@ function updateTestMonitorLayer(): void {
 export function setGameLayerVisible(visible: boolean): void {
   layerVisibleWanted = visible
   if (layerAttached) layerhost()?.setVisible(visible)
+  if (winAttached) winhost()?.setVisible(visible)
 }
 
 function currentDisplayState(win: BrowserWindow): { scale: number; dpi: number; displayId: number } {
@@ -292,43 +424,68 @@ function currentDisplayState(win: BrowserWindow): { scale: number; dpi: number; 
   }
 }
 
+/**
+ * Send one Godot-mapped input event over whichever channel the run supports:
+ * embedded runs use the byte-encoded embed:event channel (consumed by the
+ * macOS embedded display server); windowed runs inject in-process via the
+ * test agent (ogtest:input), since embed:event has no receiver there.
+ * Agent injections are fire-and-forget (command id 0 is never awaited),
+ * matching embed:event's no-acknowledgement semantics.
+ */
+function dispatchKeyEvent(e: KeyEventInput): void {
+  if (embeddedRun) embedSession?.sendInputEvent(encodeKeyEvent(e))
+  else embedSession?.sendTestCommand('input', 0, [JSON.stringify(keyEventToAgentPayload(e))])
+}
+
+function dispatchMouseButtonEvent(e: MouseButtonInput): void {
+  if (embeddedRun) embedSession?.sendInputEvent(encodeMouseButtonEvent(e))
+  else embedSession?.sendTestCommand('input', 0, [JSON.stringify(mouseButtonToAgentPayload(e))])
+}
+
+function dispatchMouseMotionEvent(e: MouseMotionInput): void {
+  if (embeddedRun) embedSession?.sendInputEvent(encodeMouseMotionEvent(e))
+  else embedSession?.sendTestCommand('input', 0, [JSON.stringify(mouseMotionToAgentPayload(e))])
+}
+
 /** Input events captured by the renderer over the game view. */
 export function handleGameInput(event: GameInputEvent): void {
   if (!embedSession) return
   switch (event.type) {
     case 'key':
-      embedSession.sendInputEvent(encodeKeyEvent(event))
+      dispatchKeyEvent(event)
       break
     case 'mousebutton':
-      embedSession.sendInputEvent(
-        encodeMouseButtonEvent({
-          ...event,
-          button: domButtonToGodot(event.button),
-          mask: domButtonsToGodotMask(event.buttons)
-        })
-      )
+      dispatchMouseButtonEvent({
+        ...event,
+        button: domButtonToGodot(event.button),
+        mask: domButtonsToGodotMask(event.buttons)
+      })
       break
     case 'mousemotion':
-      embedSession.sendInputEvent(
-        encodeMouseMotionEvent({ ...event, mask: domButtonsToGodotMask(event.buttons) })
-      )
+      dispatchMouseMotionEvent({ ...event, mask: domButtonsToGodotMask(event.buttons) })
       break
     case 'wheel':
       handleWheel(event)
       break
+    // Window-state events below only exist on the embedded display server; a
+    // windowed game gets enter/leave/focus from the OS directly.
     case 'enter':
-      embedSession.sendWinEvent(WIN_EVENT.MOUSE_ENTER)
+      if (embeddedRun) embedSession.sendWinEvent(WIN_EVENT.MOUSE_ENTER)
       break
     case 'leave':
-      embedSession.sendWinEvent(WIN_EVENT.MOUSE_EXIT)
+      if (embeddedRun) embedSession.sendWinEvent(WIN_EVENT.MOUSE_EXIT)
       break
     case 'focus':
-      embedSession.sendNotification(NOTIFICATION.APPLICATION_FOCUS_IN)
-      embedSession.sendWinEvent(WIN_EVENT.FOCUS_IN)
+      if (embeddedRun) {
+        embedSession.sendNotification(NOTIFICATION.APPLICATION_FOCUS_IN)
+        embedSession.sendWinEvent(WIN_EVENT.FOCUS_IN)
+      }
       break
     case 'blur':
-      embedSession.sendWinEvent(WIN_EVENT.FOCUS_OUT)
-      embedSession.sendNotification(NOTIFICATION.APPLICATION_FOCUS_OUT)
+      if (embeddedRun) {
+        embedSession.sendWinEvent(WIN_EVENT.FOCUS_OUT)
+        embedSession.sendNotification(NOTIFICATION.APPLICATION_FOCUS_OUT)
+      }
       break
   }
 }
@@ -344,8 +501,8 @@ function handleWheel(event: Extract<GameInputEvent, { type: 'wheel' }>): void {
   wheelAccumY += event.deltaY
   const emit = (button: number): void => {
     const base = { shift: event.shift, ctrl: event.ctrl, alt: event.alt, meta: event.meta, x: event.x, y: event.y, doubleClick: false, mask: 0 }
-    embedSession?.sendInputEvent(encodeMouseButtonEvent({ ...base, button, pressed: true }))
-    embedSession?.sendInputEvent(encodeMouseButtonEvent({ ...base, button, pressed: false }))
+    dispatchMouseButtonEvent({ ...base, button, pressed: true })
+    dispatchMouseButtonEvent({ ...base, button, pressed: false })
   }
   while (Math.abs(wheelAccumY) >= WHEEL_STEP) {
     emit(wheelAccumY > 0 ? 5 : 4)
@@ -358,17 +515,28 @@ function handleWheel(event: Extract<GameInputEvent, { type: 'wheel' }>): void {
 }
 
 /**
- * Launch the game with the embedded display server. `visible` attaches the
- * layer host so the game shows in the game view; a test run stays off-screen
- * (the game still renders on the GPU — screenshots and probes work).
+ * Launch the game. Three presentations, best available first:
+ *
+ *  - macOS: Godot's embedded display server (--embedded). `visible` attaches
+ *    the layer host so the game shows in the game view; a test run stays
+ *    off-screen (the game still renders on the GPU — screenshots and probes
+ *    work). Test runs embed without the layerhost addon (no layer to attach);
+ *    visible runs need it to composite the game into our window.
+ *  - Windows: Godot's --wid owned-window embedding + the winhost glue, for
+ *    visible play only (test runs have nothing to gain from being glued over
+ *    the stage).
+ *  - Anywhere else (Linux, failed addon/FFI loads, GENIEENGINE_WINDOWED=1
+ *    which forces this path for debugging): the game plays in its own OS
+ *    window over the same debug channel.
  */
 async function playNativeEmbedded(godot: string, projectPath: string, visible: boolean): Promise<void> {
   const win = getMainWindow()
   if (!win) throw new Error('Main window unavailable')
   const addon = layerhost()
-  if (visible && !addon) {
-    throw new Error('Native embedded mode is unavailable (layerhost addon failed to load).')
-  }
+  const forceWindowed = Boolean(process.env.GENIEENGINE_WINDOWED)
+  const embedded = process.platform === 'darwin' && !forceWindowed && (!visible || addon !== null)
+  const winHost = !embedded && !forceWindowed && visible && process.platform === 'win32' ? winhost() : null
+  embeddedRun = embedded
 
   const session = new EmbedSession({
     onContextId: (contextId) => {
@@ -385,7 +553,7 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
         // in case a modal opened before the game finished launching.
         if (!layerVisibleWanted) addon!.setVisible(false)
         emitLog('[genieengine] game embedded in the GenieEngine window (native, full performance)')
-        setState({ status: 'running', mode: 'native' })
+        setState({ status: 'running', mode: 'native', view: 'embedded' })
       } else {
         emitLog('[genieengine] game running off-screen for an AI test run')
         testContextId = contextId
@@ -419,15 +587,32 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
   const port = await session.listen()
   embedSession = session
 
-  const proc = spawn(
-    godot,
-    ['--path', projectPath, '--embedded', '--remote-debug', `tcp://127.0.0.1:${port}`, '--skip-breakpoints'],
-    {
-      cwd: projectPath,
-      env: { ...process.env, PWD: projectPath },
-      stdio: ['ignore', 'pipe', 'pipe']
-    }
-  )
+  const args = ['--path', projectPath]
+  if (embedded) {
+    // --embedded renders into a cross-process CAContext instead of opening
+    // a window; only the macOS display server implements it.
+    args.push('--embedded')
+  } else if (winHost) {
+    // --wid makes the engine create its window borderless, locked to windowed
+    // mode, and OWNED by ours (Godot's Windows equivalent of --embedded; see
+    // editor/run/game_view_plugin.cpp). --position/--resolution pre-place it
+    // over the stage so it doesn't flash at the project's default position
+    // before winhost picks it up. --position is in Godot screen space:
+    // physical px relative to the virtual desktop's top-left-most corner.
+    const rect = stageRect ?? { x: 0, y: 0, width: 640, height: 360 }
+    const sr = stageScreenRect(win, rect)
+    const origin = winHost.virtualScreenOrigin()
+    args.push('--wid', windowHandleArg(win))
+    args.push('--position', `${sr.x - origin.x},${sr.y - origin.y}`)
+    args.push('--resolution', `${sr.width}x${sr.height}`)
+  }
+  args.push('--remote-debug', `tcp://127.0.0.1:${port}`, '--skip-breakpoints')
+
+  const proc = spawn(godot, args, {
+    cwd: projectPath,
+    env: { ...process.env, PWD: projectPath },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
   await new Promise<void>((resolve, reject) => {
     proc.once('spawn', resolve)
     proc.once('error', reject)
@@ -435,6 +620,25 @@ async function playNativeEmbedded(godot: string, projectPath: string, visible: b
   nativeProcess = proc
   pipeLines(proc.stdout)
   pipeLines(proc.stderr)
+
+  if (!embedded) {
+    // No embedded display server → no game_view:set_context_id handshake; the
+    // debug connection itself is the "game is up" signal. (The game connects
+    // well after this synchronous block, so the assignment can't be late.)
+    session.onConnected = () => {
+      if (winHost && proc.pid) {
+        // Windows: the game window (owned by ours thanks to --wid) is created
+        // around now — find it and glue it over the stage.
+        beginWinEmbedAttach(session, win, winHost, proc.pid)
+      } else if (visible) {
+        emitLog('[genieengine] game running in its own window (in-app game view is unavailable on this platform)')
+        setState({ status: 'running', mode: 'native', view: 'external' })
+      } else {
+        emitLog('[genieengine] game running in a separate window for an AI test run')
+        setState({ status: 'running', mode: 'test', liveView: false, view: 'external' })
+      }
+    }
+  }
   proc.once('exit', (code, signal) => {
     emitLog(`[genieengine] game exited (${signal ?? `code ${code ?? 0}`})`)
     // Only tear down if this process is still the active run. After a Stop,
@@ -478,14 +682,26 @@ export function stopGame(): void {
   if (finalStats) logPerfStats(finalStats)
   if (nativeProcess) {
     // Ask the game to close cleanly (saves etc.); force-kill if it lingers.
+    // Each presentation has its own close channel: the embedded display
+    // server takes a close win-event, the owned window takes WM_CLOSE (what
+    // the Godot editor posts), and plain windowed runs fall back to the
+    // injected agent quitting the scene tree.
     const proc = nativeProcess
-    embedSession?.requestClose()
+    if (embeddedRun) embedSession?.requestClose()
+    else if (winAttached) winhost()?.requestClose()
+    else embedSession?.sendTestCommand('quit', 0, [])
     setTimeout(() => proc.kill(), 1500)
     nativeProcess = null
   }
   if (layerAttached) {
     layerhost()?.detach()
     layerAttached = false
+  }
+  stopWinAttachPoll()
+  if (winAttached) {
+    untrackHostWindow()
+    winhost()?.detach()
+    winAttached = false
   }
   testContextId = null
   testGameSize = null

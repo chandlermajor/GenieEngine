@@ -309,7 +309,9 @@ export function GameView({
               ? 'Watch live as the assistant plays your game and checks its state.'
               : testShot
                 ? 'Latest screenshot the assistant captured:'
-                : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
+                : state.view === 'external'
+                  ? 'The assistant is playing your game in its own window — screenshots it captures will appear here.'
+                  : 'The assistant is running your game off-screen — playing it, taking screenshots and checking its state.'}
           </p>
           {live ? (
             <TestLiveMonitor gameSize={state.testGameSize!} />
@@ -323,9 +325,32 @@ export function GameView({
       )
     }
     if (state.status === 'running') {
-      // Native embedded: the game renders as a native layer exactly behind
-      // this transparent frame, which captures and forwards input. The frame
-      // matches the (possibly letterboxed) game rect.
+      // Windowed fallback (no embedding available on this platform): the game
+      // plays in its own OS window; the stage just shows status.
+      if (state.view === 'external') {
+        return (
+          <div className="game-running-card">
+            <span className="status-dot starting big" />
+            <h2>Your game is running in its own window</h2>
+            <p className="muted">
+              The in-app game view isn't available here, so your game opened as a separate
+              window. Play it there, and press Stop here when you're done.
+            </p>
+            <button className="btn btn-stop" onClick={onStop}>
+              <StopIcon size={12} /> Stop
+            </button>
+          </div>
+        )
+      }
+      // Windows owned-window embed: the game's borderless window is glued
+      // exactly over this frame by the main process, and the OS routes input
+      // to it directly — mount no overlay, just keep the frame shape.
+      if (state.view === 'embedded-window') {
+        return <div className="game-frame-box" style={frameSize ?? { width: '100%', height: '100%' }} />
+      }
+      // Native embedded (macOS): the game renders as a native layer exactly
+      // behind this transparent frame, which captures and forwards input. The
+      // frame matches the (possibly letterboxed) game rect.
       return (
         <div className="game-frame-box" style={frameSize ?? { width: '100%', height: '100%' }}>
           <NativeGameOverlay />

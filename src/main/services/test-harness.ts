@@ -135,7 +135,12 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
       const project = getCurrentProject()
       if (!project) return { ok: false, text: 'No project is open in GenieEngine.' }
       await startGameTest(project.path)
-      return { ok: true, text: 'Game is running off-screen. Use game_input / game_screenshot / game_state to interact and observe, and stop_game_test when finished.' }
+      // Windowed fallback platforms have no off-screen embedding — say where
+      // the game actually went so the model reports it accurately.
+      const where = getGameState().view === 'external'
+        ? 'Game is running in a separate visible window (off-screen embedding is macOS-only; all game_* tools still work).'
+        : 'Game is running off-screen.'
+      return { ok: true, text: `${where} Use game_input / game_screenshot / game_state to interact and observe, and stop_game_test when finished.` }
     }
     case 'stop_game_test':
       stopGame()

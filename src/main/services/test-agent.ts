@@ -12,6 +12,12 @@ import { join } from 'node:path'
  *      ogtest:eval       [id, expr]  → evaluates a GDScript Expression against
  *                                      the scene tree root, returns the result
  *      ogtest:tree       [id]        → dumps the scene tree (paths + classes)
+ *      ogtest:input      [id, json]  → injects an InputEvent in-process (used
+ *                                      on platforms without the embedded
+ *                                      display server, where embed:event has
+ *                                      no receiver — see godot-input-codec.ts)
+ *      ogtest:quit       [id]        → quits the game cleanly (windowed runs
+ *                                      can't be closed via embed:win_event)
  *    Every command answers with `ogtest:done` [id, ok, text].
  *  - streams frame timings for the editor's FPS counter and the perf log
  *    (see perf-monitor.ts): `ogperf:frames` [PackedFloat32Array of frame
@@ -75,6 +81,10 @@ func _dispatch(cmd: String, data: Array) -> void:
 			_do_eval(id, str(data[1]))
 		"tree":
 			_do_tree(id)
+		"input":
+			_do_input(id, str(data[1]))
+		"quit":
+			get_tree().quit()
 		_:
 			_reply(id, false, "unknown test command: %s" % cmd)
 
@@ -107,6 +117,53 @@ func _do_eval(id: int, code: String) -> void:
 	if text == "" or text == "null" and result != null:
 		text = str(result)
 	_reply(id, true, text)
+
+# Rebuild an InputEvent from the JSON payload built by godot-input-codec.ts
+# (*ToAgentPayload) and inject it as if it came from the OS. Positions are in
+# window coordinates, same as real events.
+func _do_input(id: int, json: String) -> void:
+	var d = JSON.parse_string(json)
+	if typeof(d) != TYPE_DICTIONARY:
+		_reply(id, false, "invalid input payload")
+		return
+	var ev: InputEvent = null
+	match str(d.get("kind", "")):
+		"key":
+			var k := InputEventKey.new()
+			k.keycode = int(d.get("keycode", 0))
+			k.physical_keycode = int(d.get("physical", 0))
+			k.key_label = k.keycode
+			k.unicode = int(d.get("unicode", 0))
+			k.pressed = bool(d.get("pressed", false))
+			k.echo = bool(d.get("echo", false))
+			ev = k
+		"mouse_button":
+			var b := InputEventMouseButton.new()
+			b.position = Vector2(float(d.get("x", 0)), float(d.get("y", 0)))
+			b.global_position = b.position
+			b.button_index = int(d.get("button", 1))
+			b.button_mask = int(d.get("mask", 0))
+			b.pressed = bool(d.get("pressed", false))
+			b.double_click = bool(d.get("double", false))
+			ev = b
+		"mouse_motion":
+			var m := InputEventMouseMotion.new()
+			m.position = Vector2(float(d.get("x", 0)), float(d.get("y", 0)))
+			m.global_position = m.position
+			m.relative = Vector2(float(d.get("rx", 0)), float(d.get("ry", 0)))
+			m.button_mask = int(d.get("mask", 0))
+			ev = m
+		_:
+			_reply(id, false, "unknown input kind")
+			return
+	var wm := ev as InputEventWithModifiers
+	if wm:
+		wm.shift_pressed = bool(d.get("shift", false))
+		wm.ctrl_pressed = bool(d.get("ctrl", false))
+		wm.alt_pressed = bool(d.get("alt", false))
+		wm.meta_pressed = bool(d.get("meta", false))
+	Input.parse_input_event(ev)
+	_reply(id, true, "ok")
 
 func _do_tree(id: int) -> void:
 	var lines: PackedStringArray = []

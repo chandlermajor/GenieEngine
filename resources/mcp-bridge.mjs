@@ -105,7 +105,7 @@ const TOOLS = [
   {
     name: 'run_game_test',
     description:
-      'Start the currently open GenieEngine game project off-screen for testing. The game runs the full native engine (rendering, physics, audio muted display) without showing a window. Always call this before other game_* tools, and stop_game_test when done.',
+      'Start the currently open GenieEngine game project for AI testing. The game runs the full native engine (rendering, physics) — off-screen on macOS, in a separate visible window on Windows/Linux; every game_* tool works the same either way. Always call this before other game_* tools, and stop_game_test when done.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -139,7 +139,7 @@ const TOOLS = [
   {
     name: 'game_screenshot',
     description:
-      'Capture a PNG screenshot of the running test game (rendered off-screen). Returns the image and saves it inside the project at .genieengine/test-shots/ — if you cannot view images yourself, hand that saved path to the image-reader subagent. Never copy screenshots or read them from anywhere else.',
+      'Capture a PNG screenshot of the running test game. Returns the image and saves it inside the project at .genieengine/test-shots/ — if you cannot view images yourself, hand that saved path to the image-reader subagent. Never copy screenshots or read them from anywhere else.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -165,7 +165,7 @@ const TOOLS = [
   },
   {
     name: 'stop_game_test',
-    description: 'Stop the off-screen test game.',
+    description: 'Stop the running test game.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
