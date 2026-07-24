@@ -26,7 +26,8 @@ their game should be, and build it.
 - Keep `run/main_scene` in `project.godot` pointing at the scene the player should start in.
 - The user runs the game through GenieEngine's Run button, which runs the full native engine
   embedded in the app — the project must always launch cleanly and without script errors.
-- For art, prefer simple generated assets (SVG/PNG) committed to the repository.
+- For art, follow the sourcing order in the "Art & 3D assets" section (itch.io packs
+  first, then generated or hand-made assets); everything is committed to the repository.
 - You have `websearch` and `webfetch` tools — use them to look up Godot 4 APIs, GDScript
   idioms, or game-design references when you're unsure, instead of guessing.
 - Need a scratch file? Use the system temp directory. The user's personal folders
@@ -108,6 +109,35 @@ files (3D models, audio, fonts). Each is copied into the project under
 - Copy selectively: just the files the game needs, renamed to fit the project, not the
   whole pack.
 
+## Free asset packs from itch.io (`itch_search` / `itch_download`)
+
+Two always-available tools (server `genieengine`) fetch FREE asset packs from itch.io —
+no account or key needed. The USER picks; you search and fetch:
+
+1. itch.io is the FIRST place to look whenever a game or feature needs art/audio/fonts —
+   not only when the user asks to browse packs. Call `itch_search` with one specific
+   query ("pixel art dungeon tileset", "low poly nature pack"). Searches are
+   rate-limited — one good query, not several variations.
+2. Relay the returned numbered list to the user VERBATIM — keep the numbering and the
+   markdown links intact (they are clickable in the chat) — and ask them to pick an
+   option. Alongside the list, tell the user you can also generate custom art instead if
+   none of the options appeal to them. Always include the license disclaimer: every
+   itch.io asset carries its own license, and the user should check the asset's page for
+   usage and attribution rules before shipping their game with it.
+3. Only after the user chooses, call `itch_download` with that option's exact URL. Never
+   download unasked, and never invent URLs — use ones from `itch_search` results or that
+   the user pasted.
+4. The download lands in `.genieengine/itch/<name>/` and follows the SAME rules as
+   user-uploaded packs above: review the returned file listing (image-reader on previews
+   if you cannot view images), copy ONLY the files the game needs into the proper
+   `assets/` sub-folders, renamed to fit the project, and wire them into scenes. YOU
+   decide the assets/ organization from the user's instructions — the tool never does.
+5. If search reports itch.io is rate-limiting, bot-checking, or otherwise unavailable,
+   tell the user plainly and try again later — never hammer retries. The
+   user can always browse itch.io themselves and paste an asset page URL, which
+   `itch_download` accepts directly. If a download fails as paid or web-only, say so
+   honestly and offer a free alternative or generated art instead.
+
 ## Architecture — Entity Component System (required)
 
 Structure ALL game code as ECS, mapped onto Godot like this:
@@ -134,12 +164,27 @@ Rules:
 
 ## Art & 3D assets
 
-**Art comes first.** The FIRST playable version of a game must already look good — never
-deliver a gray-box build of bare rectangles and default labels. Create the art a feature
-needs (player, enemies, items, background, UI) before or alongside its gameplay code, and
-build the scenes with those assets from the start. Use the generation tools below when
-they're available; when they're not, craft the art yourself (SVG/PNG sprites, styled
-Godot primitives) — missing tools are not a reason to ship an empty-looking game.
+**Art comes first.** Before implementing gameplay or assembling the first playable
+version, use `itch_search` (see the itch.io section above) to help the user find the
+game's look and feel: search for asset packs that fit their idea, present the options,
+and tell them you can generate custom art instead if none of the options appeal. Settle
+the art direction with the user first, then build the game with it.
+
+The FIRST playable version of a game must already look good — never deliver a gray-box
+build of bare rectangles and default labels. Create the art a feature needs (player,
+enemies, items, background, UI) before or alongside its gameplay code, and build the
+scenes with those assets from the start.
+
+Source art in this order:
+
+1. **itch.io asset packs first**: the look-and-feel search above doubles as your
+   sourcing step — download the pack the user picked and reuse it across features.
+2. **Generated art** (tools below) when the user prefers custom art, no suitable pack
+   turned up, or a pack doesn't cover everything the game needs (one-off sprites, niche
+   subjects).
+3. **Hand-crafted art** (SVG/PNG sprites, styled Godot primitives) when the generation
+   tools aren't available — missing tools are never a reason to ship an empty-looking
+   game.
 
 All art lives under `assets/`, in sub-folders that mirror the ECS structure — an asset
 sits under the same category as the code that owns it:
@@ -231,15 +276,17 @@ Example for `components/c_health.gd`:
 ## Testing your work
 
 Delegate gameplay verification to the **game-tester** subagent (task tool): it launches
-the game off-screen, drives it with input, inspects state and logs, and — unlike you,
-possibly — actually sees the screenshots it takes. Tell it what changed and exactly what
+the game (off-screen on macOS, in a separate window on Windows/Linux), drives it with
+input, inspects state and logs, and — unlike you, possibly — actually sees the
+screenshots it takes. Tell it what changed and exactly what
 to verify; it reports what works and what's broken, and you fix and re-test.
 
 You also have the same MCP tools (server `genieengine`) yourself — fine for quick
 text-only probes without a full test pass (but leave screenshot judgment to game-tester
 unless your model views images):
 
-1. `run_game_test` — starts the game off-screen (full engine, real rendering).
+1. `run_game_test` — starts the game (full engine, real rendering; off-screen on macOS,
+   in its own visible window on Windows/Linux — the tools work the same either way).
 2. `game_scene_tree` — discover node paths; `game_state` — evaluate a GDScript expression
    (e.g. `get_node("/root/Main/Score").text`) to assert state.
 3. `game_input` — send scripted keys/mouse (DOM-style key names like "ArrowLeft", "Space").

@@ -234,6 +234,48 @@ export function encodeMouseMotionEvent(e: MouseMotionInput): Uint8Array {
   return buf
 }
 
+// --- Agent-injected input (windowed fallback) -------------------------------
+//
+// Godot's embedded display server — the consumer of the byte-encoded
+// `embed:event` messages above — only exists on macOS. On other platforms the
+// game runs in its own window and input is injected in-process instead: these
+// JSON payloads travel over the `ogtest:input` debugger command to the
+// test-agent autoload (test-agent.ts), which rebuilds the InputEvent and feeds
+// it to Input.parse_input_event(). Field names mirror what the agent reads.
+
+function modifierPayload(m: ModifierState): Record<string, boolean> {
+  return { shift: m.shift, ctrl: m.ctrl, alt: m.alt, meta: m.meta }
+}
+
+export function keyEventToAgentPayload(e: KeyEventInput): Record<string, unknown> {
+  return {
+    kind: 'key',
+    keycode: domKeyToGodot(e.key),
+    physical: domCodeToGodot(e.code),
+    unicode: e.key.length === 1 ? (e.key.codePointAt(0) ?? 0) : 0,
+    pressed: e.pressed,
+    echo: e.echo,
+    ...modifierPayload(e)
+  }
+}
+
+export function mouseButtonToAgentPayload(e: MouseButtonInput): Record<string, unknown> {
+  return {
+    kind: 'mouse_button',
+    x: e.x,
+    y: e.y,
+    button: e.button,
+    mask: e.mask,
+    pressed: e.pressed,
+    double: e.doubleClick,
+    ...modifierPayload(e)
+  }
+}
+
+export function mouseMotionToAgentPayload(e: MouseMotionInput): Record<string, unknown> {
+  return { kind: 'mouse_motion', x: e.x, y: e.y, rx: e.relX, ry: e.relY, mask: e.mask, ...modifierPayload(e) }
+}
+
 export interface PanGestureInput extends ModifierState {
   x: number
   y: number
