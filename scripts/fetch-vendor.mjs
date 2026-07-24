@@ -17,7 +17,7 @@
  * (Git is bundled separately via the `dugite` npm dependency.)
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const VENDOR = join(ROOT, 'vendor')
 
-const GODOT_VERSION = '4.7'
+const GODOT_VERSION = '4.7.1'
 const OPENCODE_VERSION = 'v1.17.13'
 
 function argValue(flag) {
@@ -67,6 +67,38 @@ function godotTarget() {
   }
 }
 
+/**
+ * koffi's prebuilt Windows binary, staged for cross-building the Windows
+ * installer from a non-Windows host. npm only installs the optional
+ * @koromix/koffi-* package matching the *host* platform, so the win32 build
+ * (needed by src/main/services/winhost.ts for in-app game embedding) must be
+ * fetched explicitly; electron-builder ships it to resources/koffi/, one of
+ * koffi's built-in search paths. Version comes from the installed koffi so
+ * the native binary can never drift from the JS that loads it.
+ */
+function koffiTarget() {
+  const version = JSON.parse(readFileSync(join(ROOT, 'node_modules', 'koffi', 'package.json'), 'utf8')).version
+  const pkg = `koffi-win32-${arch}`
+  const triplet = `win32_${arch}`
+  const dir = join(VENDOR, 'koffi', 'win32')
+  return {
+    url: `https://registry.npmjs.org/@koromix/${pkg}/-/${pkg}-${version}.tgz`,
+    dir,
+    check: join(dir, triplet, 'koffi.node'),
+    // npm tarballs root everything under package/; keep just the triplet dir
+    // koffi's loader looks for, and only the .node inside it (the tarball
+    // also carries .lib/.exp linker artifacts the app never needs).
+    finalize: () => {
+      rmSync(join(dir, triplet), { recursive: true, force: true })
+      renameSync(join(dir, 'package', triplet), join(dir, triplet))
+      rmSync(join(dir, 'package'), { recursive: true, force: true })
+      for (const f of readdirSync(join(dir, triplet))) {
+        if (f !== 'koffi.node') rmSync(join(dir, triplet, f), { force: true })
+      }
+    }
+  }
+}
+
 function opencodeTarget() {
   const os = platform === 'win32' ? 'windows' : platform === 'darwin' ? 'darwin' : 'linux'
   const ext = os === 'linux' ? 'tar.gz' : 'zip'
@@ -86,7 +118,7 @@ async function download(url, dest) {
 }
 
 function extract(archive, dir) {
-  if (archive.endsWith('.tar.gz')) {
+  if (archive.endsWith('.tar.gz') || archive.endsWith('.tgz')) {
     execFileSync('tar', ['-xzf', archive, '-C', dir])
   } else if (host === 'darwin') {
     // ditto preserves .app bundle structure, symlinks and permissions
@@ -108,9 +140,11 @@ async function fetchTarget(label, target) {
   }
   console.log(`… fetching ${label}`)
   mkdirSync(target.dir, { recursive: true })
-  // Preserve the real extension so extract() can tell a .tar.gz from a .zip —
-  // matters once we're fetching non-host targets (e.g. Linux's .tar.gz from macOS).
-  const archive = join(target.dir, target.url.endsWith('.tar.gz') ? '_download.tar.gz' : '_download.zip')
+  // Preserve the real extension so extract() can tell a gzip tarball from a
+  // .zip — matters once we're fetching non-host targets (e.g. Linux's .tar.gz
+  // or npm's .tgz from macOS).
+  const gzipTarball = target.url.endsWith('.tar.gz') || target.url.endsWith('.tgz')
+  const archive = join(target.dir, gzipTarball ? '_download.tgz' : '_download.zip')
   try {
     await download(target.url, archive)
     extract(archive, target.dir)
@@ -122,6 +156,7 @@ async function fetchTarget(label, target) {
       )
       if (extracted) renameSync(join(target.dir, extracted), join(target.dir, target.renameTo))
     }
+    if (target.finalize) target.finalize()
     // Executable bit is meaningless on Windows but harmless to set from a
     // POSIX host when cross-fetching the win32 target's binaries.
     if (host !== 'win32' && existsSync(target.check)) chmodSync(target.check, 0o755)
@@ -135,6 +170,9 @@ async function fetchTarget(label, target) {
 try {
   await fetchTarget(`Godot ${GODOT_VERSION}`, godotTarget())
   await fetchTarget(`OpenCode ${OPENCODE_VERSION}`, opencodeTarget())
+  // Only the win32 target needs a staged koffi binary — on the host platform
+  // npm installs the right one into node_modules, and only Windows uses FFI.
+  if (platform === 'win32') await fetchTarget('koffi win32 prebuild', koffiTarget())
 } catch (err) {
   // Don't fail `npm install` when offline — the app degrades gracefully and
   // `npm run setup` can be re-run later.

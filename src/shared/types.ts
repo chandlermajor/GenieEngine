@@ -234,11 +234,27 @@ export interface ChatPartUpdate {
   }
 }
 
+/**
+ * How a running game is displayed.
+ *  - 'embedded': rendered inside the stage as a native layer (macOS
+ *    --embedded); the renderer's transparent overlay captures and forwards
+ *    input.
+ *  - 'embedded-window': the game's own borderless window is kept glued over
+ *    the stage (Windows --wid embedding); the OS routes input to it directly,
+ *    so no overlay is mounted.
+ *  - 'external': free-floating OS window — the fallback wherever embedding is
+ *    unavailable (Linux, failed addon builds, embedding errors).
+ */
+export type GamePresentation = 'embedded' | 'embedded-window' | 'external'
+
 /** How the game is currently being presented. */
 export interface GameState {
   status: 'stopped' | 'starting' | 'running'
   /** 'native' = embedded in the game view; 'test' = AI running it off-screen. */
   mode?: 'native' | 'test'
+  /** Where the running game lives. Unset for test runs on macOS (the game is
+   *  fully off-screen — nothing is presented). */
+  view?: GamePresentation
   /** Test runs: true when the off-screen game can be mirrored live into the
    *  test monitor (layerhost addon available — macOS). */
   liveView?: boolean
