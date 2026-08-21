@@ -225,6 +225,45 @@ const GPT_IMAGE_TOOL = {
 }
 
 /**
+ * Offered only when the user has entered a ComfyUI API address in GenieEngine's
+ * setup panel (checked via /capabilities at list time). Uses a local ComfyUI
+ * instance to generate images by dynamically building a workflow JSON — the AI
+ * chooses the nodes, the model, and the sampling parameters.
+ */
+// Defaults mirror src/main/services/comfyui.ts — kept in sync by convention
+// (mcp-bridge.mjs is zero-dependency, so we don't import from there).
+const COMFYUI_DEFAULT_WIDTH = 1024
+const COMFYUI_DEFAULT_HEIGHT = 1024
+const COMFYUI_DEFAULT_STEPS = 20
+const COMFYUI_DEFAULT_CFG_SCALE = 3.5
+const COMFYUI_DEFAULT_CHECKPOINT = 'flux'
+
+const COMFYUI_TOOL = {
+  name: 'generate_2d_comfyui',
+  description:
+    'Generate a 2D image via the user\'s local ComfyUI instance (address configured in GenieEngine\'s AI settings under the ComfyUI tab). ' +
+    'Dynamically builds a workflow JSON with nodes the model chooses — the app supplies a minimal scaffold (checkpoint loader, prompt encoders, empty latent, KSampler, VAE decode, SaveImage), and the AI can extend it with any additional nodes. ' +
+    'Takes 10-300 seconds depending on workflow complexity and the local GPU. Returns the written file path plus the image. ' +
+    'Organize assets to mirror the ECS layout: folder "entities/e_player" for that entity\'s art, "ui" for HUD art, "shared" for reusable pieces. ' +
+    'If the user gives feedback on the preview, regenerate with the SAME folder and name so the files are replaced.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string', description: 'Text description of the image (one subject, style, colors, view angle).' },
+      folder: { type: 'string', description: 'Destination under assets/, mirroring the ECS structure — e.g. "entities/e_player", "ui", "shared".' },
+      name: { type: 'string', description: 'Asset name (lowercase slug), e.g. "spaceship".' },
+      width: { type: 'number', description: `Image width in pixels (default ${COMFYUI_DEFAULT_WIDTH}).` },
+      height: { type: 'number', description: `Image height in pixels (default ${COMFYUI_DEFAULT_HEIGHT}).` },
+      model: { type: 'string', description: `Checkpoint name to load (default "${COMFYUI_DEFAULT_CHECKPOINT}"). Must be installed in ComfyUI.` },
+      steps: { type: 'number', description: `Number of sampling steps (default ${COMFYUI_DEFAULT_STEPS}).` },
+      cfg_scale: { type: 'number', description: `Classifier-free guidance scale (default ${COMFYUI_DEFAULT_CFG_SCALE}).` },
+      seed: { type: 'number', description: 'Random seed (default random). Set to -1 for random.' }
+    },
+    required: ['prompt', 'folder', 'name']
+  }
+}
+
+/**
  * Offered only when the user has configured Tencent HY 3D credentials in
  * GenieEngine's setup panel (checked via /capabilities at list time).
  */
@@ -272,6 +311,7 @@ async function handle(request) {
     const tools = [...TOOLS]
     if (caps.hy3d) tools.push(HY3D_TOOL)
     if (caps.gptImage) tools.push(GPT_IMAGE_TOOL)
+    if (caps.comfyui) tools.push(COMFYUI_TOOL)
     send({ jsonrpc: '2.0', id, result: { tools } })
   } else if (method === 'tools/call') {
     const result = await callHarness(params.name, params.arguments ?? {})

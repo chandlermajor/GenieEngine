@@ -70,6 +70,7 @@ export const zh: Record<string, string> = {
   'Thinking: sent as the standard OpenAI `thinking` field. Default sends nothing.': '是否让模型在回答前思考——以标准 OpenAI `thinking` 字段发送。默认不发送。',
   'Reasoning effort: sent as the standard OpenAI `reasoning_effort` field.': '模型思考的深度——以标准 OpenAI `reasoning_effort` 字段发送。默认不发送；并非所有模型都接受所有级别。',
   'OpenAI API key placeholder': 'sk-…',
+  'ComfyUI API address': 'ComfyUI API 地址',
 
   'Models': '模型',
   '2D Asset Generation (Optional)': '2D 资源生成（可选）',

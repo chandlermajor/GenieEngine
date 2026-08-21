@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   ModelSlotRequest,
   ModelSlotStatus,
@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/types'
 import { SparkIcon, XIcon } from './Icons'
 import { useTranslation } from '../i18n/useTranslation'
+import { COMFYUI_DEFAULT_PORT } from '../../../main/services/comfyui'
 
 interface Props {
   status: SetupStatus
@@ -16,11 +17,12 @@ interface Props {
   onClose?: () => void
 }
 
-type SetupTab = 'agent' | '2d' | '3d'
+type SetupTab = 'agent' | '2d' | '3d' | 'comfyui'
 
 const TABS: { id: SetupTab; label: string }[] = [
   { id: 'agent', label: '模型' },
-  { id: '2d', label: '2D 资源生成（可选）' },
+  { id: '2d', label: '2D 资源生成（OpenAI，可选）' },
+  { id: 'comfyui', label: '2D 资源生成（ComfyUI，可选）' },
   { id: '3d', label: '3D 资源生成（可选）' }
 ]
 
@@ -252,6 +254,26 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
   const [tencentRevealed, setTencentRevealed] = useState(!status.hy3dConfigured)
   const [openaiKeyRevealed, setOpenaiKeyRevealed] = useState(!status.gptImageConfigured)
 
+  const [comfyuiUrl, setComfyuiUrl] = useState('')
+  const [comfyuiUrlRevealed, setComfyuiUrlRevealed] = useState(!status.comfyuiConfigured)
+  const [comfyuiBusy, setComfyuiBusy] = useState(false)
+  const [comfyuiError, setComfyuiError] = useState<string | null>(null)
+
+  // Seed the URL field from the stored address so an already-configured
+  // ComfyUI instance shows its actual saved value (not a default) when the
+  // tab is first viewed. Defaults to localhost:8188 when nothing is stored.
+  useEffect(() => {
+    if (status.comfyuiConfigured) {
+      window.api.getComfyUIConfig().then((result) => {
+        if (result.ok && result.data.apiUrl) {
+          setComfyuiUrl(result.data.apiUrl)
+        } else {
+          setComfyuiUrl(`http://127.0.0.1:${COMFYUI_DEFAULT_PORT}`)
+        }
+      })
+    }
+  }, [status.comfyuiConfigured])
+
   const updateSlot = (id: SlotId, patch: Partial<SlotState>): void =>
     setSlots((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }))
 
@@ -285,6 +307,20 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
     setTab(where)
   }
 
+  const saveComfyUI = async (): Promise<void> => {
+    setComfyuiBusy(true)
+    setComfyuiError(null)
+    const result = await window.api.saveComfyUIConfig(comfyuiUrl)
+    setComfyuiBusy(false)
+    if (!result.ok) {
+      setComfyuiError(result.error)
+      return
+    }
+    if (result.data.configured) {
+      onConfigured({ ...status, comfyuiConfigured: true })
+    }
+  }
+
   const save = async (): Promise<void> => {
     for (const { id, title } of MODEL_SLOTS) {
       if (!covered(id)) {
@@ -314,7 +350,8 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
       image: slotRequest('image'),
       tencentSecretId: tencentId,
       tencentSecretKey: tencentKey,
-      openaiApiKey: openaiKey
+      openaiApiKey: openaiKey,
+      comfyuiApiUrl: comfyuiUrl
     })
     setBusy(false)
     if (!result.ok) {
@@ -396,6 +433,43 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
                 onSubmit={() => void save()}
               />
             ))}
+          </>
+        )}
+
+        {tab === 'comfyui' && (
+          <>
+            <span className="setup-hint">
+              输入本地 ComfyUI 实例的 API 地址（默认端口 {COMFYUI_DEFAULT_PORT}），让助手通过动态构建 workflow JSON 生成 2D 图片并保存到游戏资源文件夹中。ComfyUI 必须在 GenieEngine 启动时处于运行状态。
+            </span>
+
+            <div className="setup-field">
+              <span className="setup-label">{t('ComfyUI API address')}</span>
+              {status.comfyuiConfigured && !comfyuiUrlRevealed ? (
+                <ConfiguredButton onClick={() => setComfyuiUrlRevealed(true)} />
+              ) : (
+                <input
+                  className="text-input"
+                  value={comfyuiUrl}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  autoFocus={status.comfyuiConfigured}
+                  onChange={(e) => setComfyuiUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void saveComfyUI()}
+                  placeholder={`http://127.0.0.1:${COMFYUI_DEFAULT_PORT}`}
+                />
+              )}
+            </div>
+
+            {comfyuiError && <div className="error-banner small">{comfyuiError}</div>}
+
+            <button
+              className="btn btn-primary"
+              disabled={busy || comfyuiBusy}
+              onClick={() => void saveComfyUI()}
+            >
+              {comfyuiBusy ? t('Saving…') : t('Save')}
+            </button>
           </>
         )}
 
