@@ -10,6 +10,11 @@ export const zh: Record<string, string> = {
   'Choose where to store your game\u2026': '选择存储位置\u2026',
   'Creating\u2026': '创建中\u2026',
   'Create Game': '创建游戏',
+  'AI game engine. Describe your game — watch it come to life.': 'AI 游戏引擎。描述你的游戏——看它栩栩如生。',
+  'Browse…': '浏览…',
+  'Will create ': '将创建 ',
+  ' with a starter Godot project and a git repository.': ' 并附带一个 starter Godot 项目和 git 仓库。',
+  'Open in VS Code': '在 VS Code 中打开',
 
   // ChatPanel
   'Make a 2D platformer with a player that moves and jumps': '制作一个有移动和跳跃功能的 2D 平台游戏',
@@ -62,6 +67,10 @@ export const zh: Record<string, string> = {
   'Running': '运行中',
 
   // SetupOverlay
+  'Thinking: sent as the standard OpenAI `thinking` field. Default sends nothing.': '是否让模型在回答前思考——以标准 OpenAI `thinking` 字段发送。默认不发送。',
+  'Reasoning effort: sent as the standard OpenAI `reasoning_effort` field.': '模型思考的深度——以标准 OpenAI `reasoning_effort` 字段发送。默认不发送；并非所有模型都接受所有级别。',
+  'OpenAI API key placeholder': 'sk-…',
+
   'Models': '模型',
   '2D Asset Generation (Optional)': '2D 资源生成（可选）',
   '3D Asset Generation (Optional)': '3D 资源生成（可选）',
@@ -129,6 +138,10 @@ export const zh: Record<string, string> = {
   'Chat': '聊天',
   'Files': '文件',
   'Git': 'Git',
+
+  // App tabs
+  'Game': '游戏',
+  'ECS': 'ECS',
 
   // FilesPanel
   'Collapse all': '全部折叠',

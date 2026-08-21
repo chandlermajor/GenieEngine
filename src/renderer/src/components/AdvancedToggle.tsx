@@ -43,7 +43,7 @@ export function AdvancedToggle({ value, onChange }: Props): React.JSX.Element {
         <p>它会添加：</p>
         <ul>
           {FEATURES.map((feature) => (
-            <li key={feature}>{feature}</li>
+            <li key={feature}>{t(feature)}</li>
           ))}
         </ul>
         <p>即使不启用高级视图，你也能创建任何内容。</p>

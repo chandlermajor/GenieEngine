@@ -88,7 +88,7 @@ export function Welcome({
             <DiscordButton />
           </div>
         </div>
-        <p className="tagline">The AI game engine. Describe your game — watch it come to life.</p>
+        <p className="tagline">{t('AI game engine. Describe your game — watch it come to life.')}</p>
 
         {!creating ? (
           <>
@@ -135,14 +135,13 @@ export function Welcome({
                   onChange={(e) => setParentDir(e.target.value)}
                 />
                 <button className="btn btn-ghost" onClick={browse}>
-                  Browse…
+                  {t('Browse…')}
                 </button>
               </div>
             </label>
             {parentDir && (
               <p className="path-preview">
-                Will create <code>{parentDir}/{folderSlug}</code> with a starter Godot project and a
-                git repository.
+                {t('Will create ')}<code>{parentDir}/{folderSlug}</code>{t(' with a starter Godot project and a git repository.')}
               </p>
             )}
             <div className="welcome-actions">

@@ -720,7 +720,7 @@ export function ChatPanel({ projectPath, opencodeAvailable, onAssistantDone }: P
           // A cancel that raced /clear reports into an already-empty chat —
           // keep it empty instead of persisting a lone "Stopped." notice.
           if (finalized.length === 0) return finalized
-          return [...finalized, { id: crypto.randomUUID(), role: 'error' as const, content: '已停止。' }]
+          return [...finalized, { id: crypto.randomUUID(), role: 'error' as const, content: t('Stopped.') }]
         }
         if (!payload.ok && payload.error) {
           return [

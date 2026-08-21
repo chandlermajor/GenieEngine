@@ -169,6 +169,7 @@ function ModelSection(props: {
         <label
           className="setup-field"
           title="Whether the model thinks before answering — sent as the standard OpenAI `thinking` field. Default sends nothing."
+          aria-label={t('Thinking: sent as the standard OpenAI `thinking` field. Default sends nothing.')}
         >
           <span className="setup-label">{t('Thinking')}</span>
           <select
@@ -186,6 +187,7 @@ function ModelSection(props: {
         <label
           className="setup-field"
           title="How hard the model thinks — sent as the standard OpenAI `reasoning_effort` field. Default sends nothing; not every model accepts every level."
+          aria-label={t('Reasoning effort: sent as the standard OpenAI `reasoning_effort` field.')}
         >
           <span className="setup-label">{t('Reasoning effort')}</span>
           <select
@@ -417,7 +419,7 @@ export function SetupOverlay({ status, onConfigured, onClose }: Props): React.JS
                   autoFocus={status.gptImageConfigured}
                   onChange={(e) => setOpenaiKey(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && void save()}
-                  placeholder={status.gptImageConfigured ? t('Leave blank to keep the stored key') : 'sk-…'}
+                  placeholder={status.gptImageConfigured ? t('Leave blank to keep the stored key') : t('OpenAI API key placeholder')}
                 />
               )}
             </div>
